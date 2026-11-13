@@ -96,7 +96,7 @@ func installService() {
 		}
 		step("límite de CPU: %s (lo aplica el servicio mientras el límite esté activo)", sliceName)
 	} else {
-		warn("sin systemd de usuario: no hay avisos ni tope de CPU; la cola funciona igual")
+		warn("sin systemd de usuario: no hay servicio. Corre `turn_watch daemon` tú mismo (cola y pausa, sin tope de CPU)")
 	}
 }
 
