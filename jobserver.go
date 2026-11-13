@@ -49,7 +49,10 @@ type queueInfo struct {
 
 // Queue: la cola mientras el TUI está abierto (su dueño).
 type Queue struct {
-	f         *os.File // FIFO abierta en lectura y escritura: no se cierra mientras viva
+	f *os.File // FIFO abierta en lectura y escritura: no se cierra mientras viva
+	// peek: la misma FIFO solo en lectura, para contar turnos. En macOS, FIONREAD
+	// sobre un descriptor de lectura y escritura cuenta el lado de escritura (0).
+	peek      *os.File
 	lock      *os.File
 	slots     int
 	idleSince time.Time
@@ -88,7 +91,13 @@ func startQueue(slots int) (*Queue, error) {
 		lock.Close()
 		return nil, err
 	}
-	q := &Queue{f: f, lock: lock, slots: slots, idleSince: time.Now()}
+	peek, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		f.Close()
+		lock.Close()
+		return nil, err
+	}
+	q := &Queue{f: f, peek: peek, lock: lock, slots: slots, idleSince: time.Now()}
 	q.write(pool(slots))
 	q.publish()
 	setSliceQuota(slots)
@@ -109,7 +118,7 @@ func (q *Queue) write(n int) {
 func (q *Queue) Slots() int { return q.slots }
 
 // Free: turnos libres ahora (bytes en la FIFO).
-func (q *Queue) Free() int { return fifoAvailable(q.f) }
+func (q *Queue) Free() int { return fifoAvailable(q.peek) }
 
 // SetSlots cambia el límite en caliente.
 func (q *Queue) SetSlots(n int) {
@@ -218,6 +227,7 @@ func (q *Queue) Stop() {
 	q.write(numCPU())
 	q.mu.Unlock()
 	q.f.Close()
+	q.peek.Close()
 	setSliceQuota(0)
 	q.lock.Close()
 }

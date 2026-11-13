@@ -128,13 +128,19 @@ func TestFifoTokens(t *testing.T) {
 	if _, err := f.Write([]byte("+++")); err != nil {
 		t.Fatal(err)
 	}
-	if n := fifoAvailable(f); n != 3 {
+	// Se cuenta con un descriptor solo de lectura, como la cola (ver Queue.peek).
+	peek, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peek.Close()
+	if n := fifoAvailable(peek); n != 3 {
 		t.Errorf("%d turnos, quería 3", n)
 	}
 	if _, err := f.Read(make([]byte, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if n := fifoAvailable(f); n != 2 {
+	if n := fifoAvailable(peek); n != 2 {
 		t.Errorf("%d turnos, quería 2", n)
 	}
 }
