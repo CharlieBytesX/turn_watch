@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -count=1 -v ./...
+      - name: build
+        run: CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=ci-${GITHUB_SHA::7}" -o turn_watch .
+      - name: smoke test (help, once, service, cargo wrapper)
+        if: runner.os == 'Linux'
+        run: scripts/smoke.sh ./turn_watch
+      - name: smoke test (+ install with launchd)
+        if: runner.os == 'macOS'
+        run: scripts/smoke.sh ./turn_watch --install
+      - name: launchd log
+        if: always() && runner.os == 'macOS'
+        run: cat ~/Library/Logs/turn_watch.log 2>/dev/null || true
+
+  cross:
+    name: cross-compile (linux, darwin × amd64, arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: vet for every target
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go vet ./...
+          done
+      - name: build
+        run: scripts/build.sh --package "ci-${GITHUB_SHA::7}"
+      - name: check binaries
+        run: |
+          file dist/*/turn_watch
+          ./dist/turn_watch-linux-amd64/turn_watch version
