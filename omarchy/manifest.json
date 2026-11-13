@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "turn_watch",
+  "name": "turn_watch",
+  "version": "1.0.0",
+  "author": "turn_watch",
+  "license": "MIT",
+  "description": "Compilaciones de Rust y lo que lanzan los agentes de código: CPU, RAM y límite de núcleos. Clic: abre el panel de turn_watch.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "turn_watch",
+    "description": "Compilaciones y agentes: qué corre, núcleos, memoria y límite",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "schema": []
+  }
+}

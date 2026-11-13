@@ -1,0 +1,10 @@
+# Binarios
+/turn_watch
+/turn_watch_*
+/dist/
+*.test
+*.out
+
+# Local
+/scratchpad/
+.DS_Store

@@ -1,0 +1,13 @@
+[Unit]
+Description=turn_watch: compilaciones de Rust y agentes (límite, avisos y barra)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/turn_watch daemon
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=graphical-session.target
