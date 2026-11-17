@@ -47,8 +47,8 @@ type Build struct {
 	Ended     time.Time `json:"ended,omitempty"`
 	Phase     string    `json:"phase"`    // qué hace ahora, en una frase
 	Activity  []string  `json:"activity"` // detalle: crates, build scripts, enlazado…
-	Done      int       `json:"done"`
-	Rate      int       `json:"rate"` // crates empezados en el último minuto
+	Done      int       `json:"done"`     // crates listos: compilados o de la caché (progress.go)
+	Rate      int       `json:"rate"`     // crates empezados en el último minuto
 	Total     int       `json:"total,omitempty"`
 	Cores     float64   `json:"cores"`
 	PeakCores float64   `json:"peak_cores"`
@@ -64,6 +64,11 @@ type Build struct {
 	lastCPU  uint64
 	lastTime time.Time
 	memEMA   float64 // RAM suavizada
+
+	targetDir string          // su carpeta target ("" si no se sabe)
+	fpSeen    map[string]bool // unidades terminadas según las huellas de cargo
+	fpDone    int
+	fpLast    time.Time
 }
 
 func (b *Build) Label() string {
@@ -98,6 +103,9 @@ type State struct {
 	// NoCap: este sistema no tiene cómo poner tope de CPU (macOS: sin cgroups); el
 	// límite es solo la cola y la pausa.
 	NoCap bool `json:"no_cap,omitempty"`
+
+	// Kache: salud y estadísticas de la caché (nil: servicio de una versión anterior).
+	Kache *KacheStatus `json:"kache,omitempty"`
 }
 
 // Usage: en qué se va la máquina, en núcleos y MB. Las tres partes no se pisan:
@@ -160,11 +168,18 @@ func main() {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	case "once":
-		fmt.Print(renderPlain(readState(), 100))
+		st := readState()
+		fmt.Print(renderPlainWarn(st, 100, localWarnings(st)))
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+}
+
+// homeOrEmpty: el directorio de inicio, o "" (sin fallar: lo usa el servicio).
+func homeOrEmpty() string {
+	h, _ := os.UserHomeDir()
+	return h
 }
 
 func statePath() string {
@@ -347,6 +362,7 @@ func buildScriptCrate(path string) string {
 type activity struct {
 	compiling []string
 	linking   []string
+	cached    []string // en manos del rustc-wrapper (kache) sin rustc: de la caché
 	scripts   []string
 	native    int // compiladores de C/C++
 	fetching  bool
@@ -371,6 +387,9 @@ func (a *activity) phase(b *Build, cpu float64) (string, []string) {
 	if len(a.linking) > 0 {
 		lines = append(lines, "enlazando: "+list(a.linking, 3))
 	}
+	if len(a.cached) > 0 {
+		lines = append(lines, "de la caché: "+list(a.cached, 6))
+	}
 	if a.paused > 0 && len(a.compiling) == 0 && len(a.scripts) == 0 && len(a.linking) == 0 {
 		return "en pausa: esperando turno", lines
 	}
@@ -384,6 +403,8 @@ func (a *activity) phase(b *Build, cpu float64) (string, []string) {
 		return fmt.Sprintf("compilando %d crates", len(a.compiling)), lines
 	case len(a.scripts) > 0:
 		return "corriendo build.rs de " + a.scripts[0], lines
+	case len(a.cached) > 0:
+		return "sacando de la caché " + list(a.cached, 2), lines
 	case a.native > 0:
 		return "compilando C/C++", lines
 	case a.fetching:
@@ -449,6 +470,7 @@ func scan(procs map[int]*proc, children map[int][]*proc, builds map[string]*Buil
 				b.Dir = gitRoot(ddir)
 			} else if cwd := procCwd(p, true); cwd != "" {
 				b.Dir = gitRoot(cwd)
+				b.targetDir = resolveTargetDir(p.loadArgs(), func(k string) string { return procEnv(p, k) }, cwd, cargoHomeDir(os.LookupEnv, homeOrEmpty()))
 			}
 			builds[key] = b
 		}
@@ -490,6 +512,26 @@ func scan(procs map[int]*proc, children map[int][]*proc, builds map[string]*Buil
 				} else {
 					act.compiling = append(act.compiling, c)
 				}
+			case isRustcWrapper(q):
+				// kache/sccache envolviendo un rustc: cuenta ya (un acierto de la caché
+				// no lanza rustc). Si lanzó rustc, ese hijo dice qué hace.
+				c := argValue(q.loadArgs(), "--crate-name")
+				if c == "" {
+					break
+				}
+				if c == "build_script_build" {
+					c = "build.rs"
+				}
+				b.mark(c + "@" + argValue(q.args, "--target"))
+				hasRustc := false
+				for _, ch := range children[q.pid] {
+					if ch.comm == "rustc" {
+						hasRustc = true
+					}
+				}
+				if !hasRustc {
+					act.cached = append(act.cached, c)
+				}
 			case strings.HasPrefix(q.comm, "build-script"):
 				act.scripts = append(act.scripts, buildScriptCrate(q.loadArgs()[0]))
 			case isNativeCompiler(q):
@@ -507,7 +549,9 @@ func scan(procs map[int]*proc, children map[int][]*proc, builds map[string]*Buil
 			stack = append(stack, children[q.pid]...)
 		}
 		sort.Strings(act.compiling)
-		b.Done = len(b.seen)
+		sort.Strings(act.cached)
+		b.scanFingerprints(now)
+		b.updateDone()
 		b.Procs = n
 		b.Rate = 0
 		for _, t := range b.seenAt {
@@ -674,9 +718,9 @@ func daemon() {
 	m := newMonitor()
 	path := statePath()
 	_ = os.MkdirAll(filepath.Dir(path), 0o700)
-	resumeFile(stoppedFile(false)) // de una sesión anterior que murió de golpe
-	// …o del servicio de antes del cambio de nombre (rustwatch).
-	resumeFile(filepath.Join(oldRuntimeDir(), "stopped.json"))
+	// Lo que dejó en pausa el servicio de antes del cambio de nombre (rustwatch); lo
+	// de una sesión anterior de turn_watch lo reanuda newEnforcer.
+	resumeFile(oldRuntimeDir(), os.Getuid(), "stopped.json")
 	migrateConfig()
 	ticks := 0
 	sig := make(chan os.Signal, 1)
@@ -692,6 +736,11 @@ func daemon() {
 	enf := newEnforcer(false)
 	acap := newAgentCap()
 	cfg := loadConfig()
+	// kache se consulta aparte: sus comandos tardan y el bucle no debe esperar.
+	kw := newKacheWatcher()
+	kstop := make(chan struct{})
+	defer close(kstop)
+	go kw.Loop(kstop)
 	apply := func(active bool) {
 		switch {
 		case active && q == nil:
@@ -744,6 +793,7 @@ func daemon() {
 		st.AgentsCapped = acap.Captured()
 		st.System = helperAlive()
 		st.DaemonPID = os.Getpid()
+		st.Kache = kw.Snapshot()
 		for _, b := range ended {
 			if b.Ended.Sub(b.Started) >= minNotify {
 				notify(b)
@@ -838,12 +888,13 @@ func (b *Build) mark(key string) {
 	}
 }
 
-// progressText: cuántos crates compiló y a qué ritmo. No hay porcentaje: lo
-// que ya está en la caché no se compila y cargo no dice cuánto falta.
+// progressText: cuántos crates están listos (compilados o de la caché) y a qué
+// ritmo. No hay porcentaje: lo que ya estaba al día no se toca y cargo no dice
+// cuánto falta.
 func progressText(b *Build) string {
-	s := fmt.Sprintf("%d crates compilados", b.Done)
+	s := fmt.Sprintf("%d crates listos", b.Done)
 	if b.Done == 1 {
-		s = "1 crate compilado"
+		s = "1 crate listo"
 	}
 	if b.Rate > 0 {
 		s += fmt.Sprintf(" · %d/min", b.Rate)
@@ -943,12 +994,14 @@ macOS): sigue activo aunque cierres el panel, hasta que lo desactives.
   turn_watch limit [N]    ver o cambiar el límite (en caliente)
   turn_watch sistema on|off  on: también root, Docker y otros usuarios (pide sudo);
                           off: solo tu usuario
-  turn_watch once         el estado actual, una vez, en texto plano
+  turn_watch once         el estado actual, una vez, en texto plano (con kache:
+                          aciertos de 24 h, tiempo ahorrado, almacén y avisos)
   turn_watch hold N -- cmd  reservar N núcleos de la cola para cmd
   turn_watch install      instalar para este usuario: el comando, el envoltorio de
-                          cargo, la caché kache (la detecta o la instala: binstall
-                          o binario oficial de GitHub), el servicio y, en Omarchy, el
-                          indicador de la barra. Migra una instalación de rustwatch.
+                          cargo, la caché kache (la detecta o baja el binario
+                          oficial de GitHub, con versión y SHA-256 fijados), el
+                          servicio y, en Omarchy, el indicador de la barra. Migra
+                          una instalación de rustwatch.
   turn_watch uninstall    quitar todo lo anterior
   turn_watch version      la versión
 
@@ -966,6 +1019,9 @@ En macOS no hay cgroups: el límite es la cola de núcleos y la pausa de los tra
 de compilación que sobran; no hay tope de CPU ni para cargo ni para los agentes.
 
 Configuración: ~/.config/turn_watch/config.json (en macOS, ~/Library/Application
-Support/turn_watch/config.json). Variables: TURN_WATCH_SIN_KACHE=1 (install sin
-kache); se aceptan también las viejas RUSTWATCH_*.
+Support/turn_watch/config.json); "kache": false apaga la caché y
+"kache_in_slice": true (Linux) mete kache.service en turn_watch.slice al instalar.
+Variables: TURN_WATCH_SIN_KACHE=1 (install sin kache); TURN_WATCH_KACHE_VERSION=vX.Y.Z
+con TURN_WATCH_KACHE_SHA256=<hex> o =release (otra versión de kache, a propósito; si
+no, la fijada); se aceptan también las viejas RUSTWATCH_*.
 `

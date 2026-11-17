@@ -194,3 +194,13 @@ func runtimeBase() string {
 	}
 	return os.TempDir()
 }
+
+// defaultRootStateBase: la carpeta del ayudante de root (/var/run es solo de root).
+const defaultRootStateBase = "/var/run/turn_watch"
+
+// applyKacheSlice: en macOS no hay slices (ni tope de CPU).
+func applyKacheSlice(on bool) {
+	if on {
+		warn(`"kache_in_slice" no aplica en macOS: no hay cgroups`)
+	}
+}

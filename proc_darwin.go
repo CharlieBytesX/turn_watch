@@ -313,7 +313,7 @@ func sample(builds map[string]*Build) {
 			stack = stack[:len(stack)-1]
 			for _, c := range children[pid] {
 				stack = append(stack, c.pid)
-				if c.comm != "rustc" {
+				if c.comm != "rustc" && !isRustcWrapper(c) {
 					continue
 				}
 				args := c.loadArgs()
@@ -325,9 +325,13 @@ func sample(builds map[string]*Build) {
 				}
 			}
 		}
-		b.Done = len(b.seen)
+		b.updateDone()
 	}
 }
+
+// procEnv: en macOS el entorno de otro proceso no se lee (kern.procargs2 lo trae,
+// pero no siempre); sin él, el target sale de --target-dir, la config o el workspace.
+func procEnv(p *proc, key string) string { return "" }
 
 // notifyDesktop: aviso del Centro de notificaciones. El texto va como argumento
 // del script, nunca dentro del código de AppleScript.

@@ -293,6 +293,14 @@ func usageBlock(st *State, cols int, full bool) []string {
 			}
 		}
 	}
+	line, sev := kacheLine(st.Kache)
+	out = append(out, label("Caché")+fitSegs("", []seg{{sevStyle(sev), line}}, cols-lw))
+	if full {
+		lines, sevs := kacheDetail(st.Kache, time.Now())
+		for i, l := range lines {
+			out = append(out, fitSegs("", []seg{{"", strings.Repeat(" ", lw)}, {sevStyle(sevs[i]), l}}, cols))
+		}
+	}
 	return out
 }
 
@@ -353,7 +361,7 @@ func items(st *State) []item {
 		}
 		d := []string{progressText(b)}
 		if b.Total > 0 {
-			d[0] += fmt.Sprintf(" · el proyecto tiene ~%d (lo que está en caché no se recompila)", b.Total)
+			d[0] += fmt.Sprintf(" de ~%d en Cargo.lock (los que ya estaban al día no cuentan)", b.Total)
 		}
 		d = append(d, fmt.Sprintf("pico %.1f núcleos · %s (pico %s) · %d procesos%s", b.PeakCores, mb(b.MemMB), mb(b.PeakMemMB), b.Procs,
 			map[bool]string{true: " · dentro de Docker", false: ""}[b.Docker]))
@@ -599,6 +607,7 @@ type ui struct {
 	off    int             // primera línea visible de la lista
 	keys   []string        // filas del último cuadro, en orden
 	page   int             // alto de la lista
+	warns  []string        // avisos del entorno de quien mira (localWarnings)
 }
 
 func newUI() *ui { return &ui{open: map[string]bool{}} }
@@ -708,6 +717,12 @@ func panel(st *State, u *ui, rows, cols int) []string {
 		out = append(out, "")
 		out = append(out, top...)
 	}
+	// Avisos del entorno (otro cargo antes en el PATH…): siempre, si caben.
+	for _, w := range u.warns {
+		if len(out)+4 < rows {
+			out = append(out, fitSegs("", []seg{{bold + yellow, " ⚠ " + w}}, cols))
+		}
+	}
 	out = append(out, "")
 
 	// La lista, con desplazamiento para que la fila elegida (y su detalle) se vea.
@@ -756,12 +771,19 @@ func contains(xs []string, s string) bool {
 // ---------- `turn_watch once` ----------
 
 // renderPlain: el estado en texto plano (sin colores), para leer o pegar.
-func renderPlain(st *State, width int) string {
-	if st == nil {
-		return "turn_watch: el servicio no está corriendo (" + startHint() + ")\n"
-	}
+func renderPlain(st *State, width int) string { return renderPlainWarn(st, width, nil) }
+
+// renderPlainWarn: renderPlain con los avisos del entorno de quien mira.
+func renderPlainWarn(st *State, width int, warns []string) string {
 	var sb strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&sb, format, a...) }
+	if st == nil {
+		w("turn_watch: el servicio no está corriendo (%s)\n", startHint())
+		for _, x := range warns {
+			w("⚠ %s\n", x)
+		}
+		return sb.String()
+	}
 	w("turn_watch · %s\n", time.Now().Format("15:04:05"))
 	if !daemonUp(st) {
 		w("⚠ el servicio no actualiza desde hace %s\n", dur(time.Since(st.Updated)))
@@ -803,6 +825,16 @@ func renderPlain(st *State, width int) string {
 	w("RAM  [%s] %s de %s GB\n", pbar([3]float64{float64(u.BM), float64(u.AM), float64(u.OM)}, float64(st.MemTotMB)), gb(st.MemUsedMB), gb(st.MemTotMB))
 	w("     compilaciones %s · agentes %s · otros %s GB\n", gb(u.BM), gb(u.AM), gb(u.OM))
 	w("     (%s compilaciones · %s agentes · %s otros)\n", cats[0].plain, cats[1].plain, cats[2].plain)
+	kl, ksev := kacheLine(st.Kache)
+	mark := map[bool]string{true: "⚠ ", false: ""}[ksev >= sevWarn]
+	w("Caché %s%s\n", mark, kl)
+	kd, kdsev := kacheDetail(st.Kache, time.Now())
+	for i, l := range kd {
+		w("      %s%s\n", map[bool]string{true: "⚠ ", false: ""}[kdsev[i] >= sevWarn], cut(l, width-6))
+	}
+	for _, x := range warns {
+		w("⚠ %s\n", x)
+	}
 
 	its := items(st)
 	section := -1

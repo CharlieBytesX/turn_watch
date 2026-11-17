@@ -251,15 +251,17 @@ func fifoAvailable(f *os.File) int {
 
 // queueStatus: para quien no es el dueño (barra, daemon). slots 0 = sin límite.
 func queueStatus() (slots, free int) {
-	b, err := os.ReadFile(queueInfoPath())
+	// Sin seguir enlaces y solo si la carpeta es del dueño de la cola: el ayudante de
+	// root también lo llama, sobre la carpeta del usuario.
+	b, err := readFileSafe(runtimeDir(), helperUID, "queue.json", 4096)
 	if err != nil {
 		return 0, 0
 	}
 	var qi queueInfo
-	if json.Unmarshal(b, &qi) != nil || qi.Slots == 0 || syscall.Kill(qi.PID, 0) != nil {
+	if json.Unmarshal(b, &qi) != nil || qi.Slots == 0 || qi.PID <= 1 || syscall.Kill(qi.PID, 0) != nil {
 		return 0, 0
 	}
-	f, err := os.OpenFile(jobserverPath(), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	f, err := openFifoSafe(runtimeDir(), helperUID, "jobserver")
 	if err != nil {
 		return 0, 0
 	}
@@ -393,16 +395,31 @@ func run(args []string, sig chan os.Signal) int {
 // controlPath: `turn_watch on|off` y el TUI le piden al servicio activar o desactivar.
 func controlPath() string { return filepath.Join(runtimeDir(), "control") }
 
-func helperPidPath() string { return filepath.Join(runtimeDir(), "helper.pid") }
+const helperPidName = "helper.pid"
 
-// helperAlive: el ayudante de root (`sudo turn_watch enforce`) está corriendo.
+// helperAlive: el ayudante de root (`sudo turn_watch enforce`) está corriendo. Su
+// helper.pid está en la carpeta de root (rootStateDir); el de un ayudante de una
+// versión anterior, en la del usuario, cuenta solo si ese pid es un turn_watch de
+// root (para no lanzar otro mientras el viejo siga).
 func helperAlive() bool {
-	b, err := os.ReadFile(helperPidPath())
+	if b, err := readFileSafe(rootStateDir(), rootOwner, helperPidName, 64); err == nil && pidAlive(b) {
+		return true
+	}
+	b, err := readFileSafe(runtimeDir(), helperUID, helperPidName, 64)
 	if err != nil {
 		return false
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 0 {
+	if err != nil || pid <= 1 || !pidAlive(b) {
+		return false
+	}
+	p := readProcsLite()[pid]
+	return p != nil && p.uid == rootOwner && (p.comm == "turn_watch" || p.comm == oldName)
+}
+
+func pidAlive(b []byte) bool {
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 1 {
 		return false
 	}
 	err = syscall.Kill(pid, 0)

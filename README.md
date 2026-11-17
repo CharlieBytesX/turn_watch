@@ -42,13 +42,19 @@ the binary in `~/.local/bin` and runs `turn_watch install`, which sets up:
   wrapper; see [FAQ](#why-a-cargo-wrapper));
 - the background service: `turn_watch.service` + `turn_watch.slice` (systemd user
   units) on Linux, a LaunchAgent on macOS;
-- kache (found, or installed with `cargo-binstall` or from its official GitHub
-  release, SHA-256 checked) and `kache init`, which sets `rustc-wrapper` in
-  `~/.cargo/config.toml`. Skip it with `TURN_WATCH_SIN_KACHE=1`;
+- kache (found, or downloaded from its official GitHub release at a version pinned
+  in turn_watch and checked against a SHA-256 pinned in turn_watch) and
+  `kache init`, which sets `rustc-wrapper` in `$CARGO_HOME/config.toml`, unless
+  cargo already uses another `rustc-wrapper` (sccache, `RUSTC_WRAPPER`…), which is
+  never overwritten. Skip kache with `TURN_WATCH_SIN_KACHE=1`; install another
+  version knowingly with `TURN_WATCH_KACHE_VERSION=vX.Y.Z` plus
+  `TURN_WATCH_KACHE_SHA256=<sha256 of the .tar.gz>` (or `=release` to trust that
+  release's own `.sha256`);
 - on Omarchy, the bar widget.
 
-`~/.local/bin` must come **before** `~/.cargo/bin` in your `PATH`; the installer
-warns if it does not.
+`~/.local/bin` must come **before** `~/.cargo/bin` (and before shims such as mise's
+or asdf's) in your `PATH`; the installer, `turn_watch once` and the panel warn if
+another `cargo` comes first.
 
 Options: `TURN_WATCH_VERSION=v0.1.0` installs a given tag; `TURN_WATCH_NO_SETUP=1`
 only drops the binary. Or download a tarball from
@@ -101,12 +107,38 @@ The default limit is all cores minus two. Configuration lives in
   "active": true,
   "system": false,
   "agents": ["claude", "codex", "opencode", "pi", "aider", "gemini", "cursor-agent", "goose"],
-  "agents_cap": true
+  "agents_cap": true,
+  "kache": true,
+  "kache_in_slice": false
 }
 ```
 
 `agents` is the list of process names treated as coding agents; `agents_cap: false`
-leaves agents uncapped (Linux).
+leaves agents uncapped (Linux). `kache: false` turns the cache off (and its
+warnings). `kache_in_slice: true` (Linux) makes `turn_watch install` add a drop-in
+that runs `kache.service` inside `turn_watch.slice`, so the kache daemon shares the
+CPU cap; it applies the next time you restart `kache.service` (see
+[kache](#kache)).
+
+### kache
+
+The panel's **Caché** line and `turn_watch once` show kache's health and its last
+24 h, from `kache --json stats --since 24h` every 30 s (only while its daemon is
+up: `kache stats` would start one) and `kache --json doctor` every 30 min:
+
+```
+Caché kache 82 % aciertos (1230/1500 en 24h) · ahorró 1h12m · almacén 3.2 GB de 10.0 GB · daemon ● 2.1.1
+      locales 1180 · prefetch 40 · remotos 10 · duplicados 20 · fallos 250 · 6120 entradas
+      desde 2026-10-02: 48211 aciertos, ahorró 42h00m
+```
+
+When something is wrong it says what (not installed, cargo uses another wrapper,
+daemon down, stats unavailable and why, doctor issues, last error) instead of a
+number. Two things to know: kache's daemon (`kache.service`) runs outside
+`turn_watch.slice` by default, so its own CPU (hashing, restores, uploads) is not
+capped — compiles on a cache miss still run under cargo, inside the slice; and
+kache has its own compile scheduler, which paces compilers after misses on top of
+turn_watch's queue.
 
 ## How it works
 

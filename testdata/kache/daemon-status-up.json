@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "command": "daemon-status",
+  "success": true,
+  "version": "2.1.1",
+  "epoch": 1762941060,
+  "daemon_running": true,
+  "service_installed": true,
+  "service_path": "/home/u/.config/systemd/user/kache.service",
+  "socket": "/home/u/.cache/kache/daemon.sock",
+  "daemon_version": "2.1.1",
+  "daemon_epoch": 1762941060,
+  "daemon_config_path": "/home/u/.config/kache/config.toml",
+  "startup_log": "/home/u/.cache/kache/daemon-startup.log",
+  "service_executable_mismatch": false
+}

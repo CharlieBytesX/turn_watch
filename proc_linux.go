@@ -148,10 +148,10 @@ func sample(builds map[string]*Build) {
 					}
 					stack = append(stack, child)
 					comm, _ := os.ReadFile(fmt.Sprintf("/proc/%d/comm", child))
-					if strings.TrimSpace(string(comm)) != "rustc" {
+					p := &proc{pid: child, comm: strings.TrimSpace(string(comm))}
+					if p.comm != "rustc" && !isRustcWrapper(p) {
 						continue
 					}
-					p := &proc{pid: child}
 					args := p.loadArgs()
 					if c := argValue(args, "--crate-name"); c != "" {
 						if c == "build_script_build" {
@@ -162,7 +162,7 @@ func sample(builds map[string]*Build) {
 				}
 			}
 		}
-		b.Done = len(b.seen)
+		b.updateDone()
 	}
 }
 
@@ -199,3 +199,17 @@ const hasChildTimes = true
 
 // readProcsLite: en Linux leer /proc ya es barato: lo mismo que readProcs.
 func readProcsLite() map[int]*proc { return readProcs() }
+
+// procEnv: una variable del entorno del proceso ("" si no está o no se puede leer).
+func procEnv(p *proc, key string) string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", p.pid))
+	if err != nil {
+		return ""
+	}
+	for _, kv := range strings.Split(string(b), "\x00") {
+		if v, ok := strings.CutPrefix(kv, key+"="); ok {
+			return v
+		}
+	}
+	return ""
+}

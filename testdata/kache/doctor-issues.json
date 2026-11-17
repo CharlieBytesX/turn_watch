@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "command": "doctor",
+  "success": true,
+  "version": "2.1.1",
+  "rustc": "rustc 1.95.0 (2026-10-29)",
+  "issues": 1,
+  "checks": [
+    { "label": "Binary", "pass": true, "optional": false, "detail": "/home/u/.local/bin/kache", "fix": null },
+    { "label": "RUSTC_WRAPPER", "pass": true, "optional": false, "detail": "kache (~/.cargo/config.toml)", "fix": null },
+    { "label": "Cache FS", "pass": false, "optional": false, "detail": "1.2 GiB free, below the 1 GiB reserve", "fix": "kache clean" },
+    { "label": "sccache", "pass": false, "optional": true, "detail": "not installed", "fix": null }
+  ],
+  "next": [ { "argv": ["kache", "clean"], "why": "free space" } ]
+}

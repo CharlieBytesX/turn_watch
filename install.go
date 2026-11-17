@@ -96,9 +96,23 @@ func install() {
 	// 3. El servicio de fondo (systemd de usuario o launchd).
 	installService()
 
-	// 4. Caché de compilación (kache): se detecta o se instala, y se configura.
-	if envVar("SIN_KACHE") == "" {
-		setupKache()
+	// 4. Caché de compilación (kache): se detecta o se instala, y se configura. Con
+	// TURN_WATCH_SIN_KACHE=1 queda desactivada en config.json (el panel no avisa).
+	{
+		cfg := loadConfig()
+		if envVar("SIN_KACHE") != "" {
+			off := false
+			cfg.Kache = &off
+			recordSetupError("")
+			step("caché de compilación: desactivada (TURN_WATCH_SIN_KACHE)")
+		} else {
+			cfg.Kache = nil
+		}
+		saveConfig(cfg)
+		if cfg.Kache == nil {
+			setupKache()
+			applyKacheSlice(cfg.KacheInSlice != nil && *cfg.KacheInSlice)
+		}
 	}
 
 	// 5. Extras del escritorio (en Omarchy, el indicador de la barra).
@@ -158,19 +172,18 @@ func uninstall() {
 		filepath.Join(binDir(), "turn_watch"), filepath.Dir(configPath()))
 }
 
-// checkPath avisa si el cargo de verdad va antes que el envoltorio en el PATH.
+// checkPath avisa si otro cargo (el de rustup, un shim de mise o asdf…) va antes
+// que el envoltorio en el PATH. `turn_watch once` y el panel lo siguen avisando.
 func checkPath(bin string) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if dir == bin {
-			return
-		}
-		if fi, err := os.Stat(filepath.Join(dir, "cargo")); err == nil && !fi.IsDir() {
-			warn("en tu PATH, %s va antes que %s: el envoltorio no se usará.", dir, bin)
-			warn("pon %s primero (p. ej. en ~/.profile o config.fish)", bin)
-			return
-		}
+	self, _ := os.Executable()
+	first, bypass := cargoBypass(os.Getenv("PATH"), bin, self)
+	switch {
+	case bypass:
+		warn("en tu PATH, %s va antes que %s: el envoltorio no se usará.", first, filepath.Join(bin, "cargo"))
+		warn("pon %s primero (p. ej. en ~/.profile o config.fish; con mise, después de su activación)", bin)
+	case first == "":
+		warn("%s no está en tu PATH: agrégalo antes de ~/.cargo/bin", bin)
 	}
-	warn("%s no está en tu PATH: agrégalo antes de ~/.cargo/bin", bin)
 }
 
 func copyFile(src, dst string) error {

@@ -2,19 +2,26 @@ package main
 
 // kache (caché de compilación para Rust y C/C++, https://kunobi.ninja/docs/kache) es
 // parte de la instalación de turn_watch:
-//   1. si ya está (en el PATH o en ~/.cargo/bin), se usa;
-//   2. si no, con cargo-binstall (binario oficial, unos segundos);
-//   3. si tampoco hay binstall, se baja el binario oficial de GitHub, se verifica su
-//      SHA-256 y se deja en ~/.local/bin.
-// Después se configura con `kache init -y --no-shell`: solo la configuración de cargo
-// (rustc-wrapper), sin tocar la shell, porque el envoltorio de cargo es el de turn_watch.
+//   1. si ya está (en el PATH, en ~/.cargo/bin o en ~/.local/bin), se usa;
+//   2. si no, se baja el binario oficial de GitHub de una versión FIJADA aquí
+//      (kacheVersion) y se verifica contra el SHA-256 fijado aquí para cada
+//      plataforma (kacheSHA256), no contra el .sha256 del mismo release: si alguien
+//      cambia el release, la instalación falla en vez de instalar otra cosa. Otra
+//      versión solo a propósito: TURN_WATCH_KACHE_VERSION=vX.Y.Z junto con
+//      TURN_WATCH_KACHE_SHA256=<hex del .tar.gz de esta plataforma> (o "release" para
+//      aceptar, sabiéndolo, el .sha256 publicado en ese release).
+//      cargo-binstall ya no se usa: baja la última versión sin un hash fijado.
+// Después se configura con `kache init -y --no-shell` (solo rustc-wrapper en la
+// configuración de cargo, sin tocar la shell: el envoltorio de cargo es el de
+// turn_watch), pero solo si cargo no usa ya otro rustc-wrapper (cargoconf.go): uno
+// que ya exista (sccache, una ruta propia, RUSTC_WRAPPER) no se pisa; se avisa.
+// Lo que falle queda en kache-setup-error.txt y el servicio lo sigue mostrando.
 
 import (
 	"archive/tar"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +34,54 @@ import (
 )
 
 const kacheRepo = "kunobi-ninja/kache"
+
+// kacheVersion: la versión que instala turn_watch si kache no está.
+const kacheVersion = "v2.1.1"
+
+// kacheSHA256: SHA-256 de cada kache-<arch>-<triple>.tar.gz de kacheVersion,
+// calculados al fijar la versión (y comparados con los .sha256 del release).
+var kacheSHA256 = map[string]string{
+	"x86_64-unknown-linux-musl":  "7603022ee78b48a9afde9055b0df27e5c2cef1351a54fa2de6b4fde0f37ae22c",
+	"aarch64-unknown-linux-musl": "466f0aef4885f5291359b3c1bc0c9976824634194c5b67e1cee2a4fe3035155a",
+	"x86_64-apple-darwin":        "69627cfec3017aa521d06a84afc6c5e74734468678bd6659d92afd57d9a4f457",
+	"aarch64-apple-darwin":       "d4533baa3c57be51d5f2390b70551ca9d6c2a83a1933266fa0a57053774e08f6",
+}
+
+// kacheAsset: el triple de esta plataforma ("" si no hay binario de kache).
+func kacheAsset(goos, goarch string) string {
+	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[goarch]
+	triple := map[string]string{"linux": "unknown-linux-musl", "darwin": "apple-darwin"}[goos]
+	if arch == "" || triple == "" {
+		return ""
+	}
+	return arch + "-" + triple
+}
+
+// kachePin: qué versión bajar y con qué SHA-256 verificarla. want == "release":
+// aceptar el .sha256 publicado (solo si se pidió con TURN_WATCH_KACHE_SHA256=release).
+func kachePin(asset, version, sum string) (tag, want string, err error) {
+	if version == "" || version == kacheVersion {
+		if sum != "" && sum != kacheSHA256[asset] {
+			return "", "", fmt.Errorf("TURN_WATCH_KACHE_SHA256 no coincide con el hash fijado de kache %s", kacheVersion)
+		}
+		if kacheSHA256[asset] == "" {
+			return "", "", fmt.Errorf("no hay hash fijado de kache %s para %s", kacheVersion, asset)
+		}
+		return kacheVersion, kacheSHA256[asset], nil
+	}
+	if !strings.HasPrefix(version, "v") || strings.ContainsAny(version, "/ ?#") {
+		return "", "", fmt.Errorf("TURN_WATCH_KACHE_VERSION no válida: %q (p. ej. v2.1.1)", version)
+	}
+	switch {
+	case sum == "":
+		return "", "", fmt.Errorf("TURN_WATCH_KACHE_VERSION=%s necesita TURN_WATCH_KACHE_SHA256 (el hash del .tar.gz de %s, o \"release\" para aceptar el del release)", version, asset)
+	case sum == "release":
+		return version, "release", nil
+	case len(sum) != 64 || strings.Trim(strings.ToLower(sum), "0123456789abcdef") != "":
+		return "", "", fmt.Errorf("TURN_WATCH_KACHE_SHA256 no es un SHA-256 en hex")
+	}
+	return version, strings.ToLower(sum), nil
+}
 
 // findKache: ruta de kache si ya está instalado.
 func findKache() string {
@@ -44,89 +99,80 @@ func findKache() string {
 	return ""
 }
 
-// setupKache instala (si hace falta) y configura kache. Errores: aviso, nunca fatal.
+// setupKache instala (si hace falta) y configura kache. Los errores no son fatales,
+// pero quedan anotados (recordSetupError) y el servicio los sigue mostrando.
 func setupKache() {
 	start := time.Now()
 	kache := findKache()
 	how := "ya estaba"
 	if kache == "" {
 		var err error
-		if kache, how, err = installKache(); err != nil {
-			warn("kache: no se pudo instalar (%v); se sigue sin caché", err)
+		if kache, err = downloadKache(); err != nil {
+			recordSetupError("no se pudo instalar: " + err.Error())
+			warn("kache: no se pudo instalar (%v); sin caché (el panel lo seguirá avisando)", err)
 			return
 		}
+		how = "bajado de GitHub, " + kacheInstalledVersion()
 	}
-	if kacheConfigured() {
-		step("caché de compilación: kache (%s, ya configurado)", how)
+	w := detectWrapper(os.LookupEnv, home())
+	switch w.Kind {
+	case WrapperKache:
+		recordSetupError("")
+		step("caché de compilación: kache (%s, ya configurado: %s)", how, w.Source)
+		return
+	case WrapperOther, WrapperOff, WrapperUnknown:
+		msg := w.String() + "; no se cambia, así que kache no se configura"
+		recordSetupError(msg)
+		warn("kache: %s", msg)
 		return
 	}
 	cmd := exec.Command(kache, "init", "-y", "--no-shell")
 	if out, err := cmd.CombinedOutput(); err != nil {
+		recordSetupError("kache init falló: " + lastLine(string(out)))
 		warn("kache init falló: %s", lastLine(string(out)))
 		return
 	}
+	if w := detectWrapper(os.LookupEnv, home()); w.Kind != WrapperKache {
+		recordSetupError("después de kache init: " + w.String())
+		warn("kache init terminó, pero %s", w.String())
+		return
+	}
+	recordSetupError("")
 	step("caché de compilación: kache (%s, configurado en %s)", how, time.Since(start).Round(100*time.Millisecond))
 }
 
-// kacheConfigured: cargo ya usa kache como rustc-wrapper.
-func kacheConfigured() bool {
-	b, err := os.ReadFile(filepath.Join(home(), ".cargo", "config.toml"))
-	return err == nil && strings.Contains(string(b), `rustc-wrapper = "kache"`)
+func kacheInstalledVersion() string {
+	if v := envVar("KACHE_VERSION"); v != "" {
+		return v
+	}
+	return kacheVersion
 }
 
-func installKache() (path, how string, err error) {
-	if bin := cargoBinstall(); bin != "" {
-		cmd := exec.Command(bin, "kache", "--no-confirm", "--disable-strategies", "compile")
-		if out, err := cmd.CombinedOutput(); err == nil {
-			if p := findKache(); p != "" {
-				return p, "instalado con cargo-binstall", nil
-			}
-		} else {
-			warn("cargo-binstall falló (%s); se baja de GitHub", lastLine(string(out)))
-		}
-	}
-	p, err := downloadKache()
-	if err != nil {
-		return "", "", err
-	}
-	return p, "bajado de GitHub", nil
-}
-
-func cargoBinstall() string {
-	if p, err := exec.LookPath("cargo-binstall"); err == nil {
-		return p
-	}
-	p := filepath.Join(home(), ".cargo", "bin", "cargo-binstall")
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	return ""
-}
-
-// downloadKache baja el último release para esta plataforma y verifica su SHA-256.
+// downloadKache baja kache (kacheVersion, o la pedida a propósito) para esta
+// plataforma y lo verifica contra el SHA-256 fijado antes de abrirlo.
 func downloadKache() (string, error) {
-	arch := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
-	triple := map[string]string{"linux": "unknown-linux-musl", "darwin": "apple-darwin"}[runtime.GOOS]
-	if arch == "" || triple == "" {
+	asset := kacheAsset(runtime.GOOS, runtime.GOARCH)
+	if asset == "" {
 		return "", fmt.Errorf("no hay binario de kache para %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
-	client := &http.Client{Timeout: 2 * time.Minute}
-	var rel struct {
-		Tag string `json:"tag_name"`
-	}
-	if err := getJSON(client, "https://api.github.com/repos/"+kacheRepo+"/releases/latest", &rel); err != nil || rel.Tag == "" {
-		return "", fmt.Errorf("versión de kache: %v", err)
-	}
-	name := fmt.Sprintf("kache-%s-%s.tar.gz", arch, triple)
-	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", kacheRepo, rel.Tag)
-
-	sumText, err := getText(client, base+name+".sha256")
+	tag, want, err := kachePin(asset, envVar("KACHE_VERSION"), envVar("KACHE_SHA256"))
 	if err != nil {
-		return "", fmt.Errorf("sha256: %w", err)
+		return "", err
 	}
-	want := strings.Fields(sumText)
-	if len(want) == 0 {
-		return "", fmt.Errorf("sha256 vacío")
+	client := &http.Client{Timeout: 2 * time.Minute}
+	name := "kache-" + asset + ".tar.gz"
+	base := fmt.Sprintf("https://github.com/%s/releases/download/%s/", kacheRepo, tag)
+	if want == "release" {
+		sumText, err := getText(client, base+name+".sha256")
+		if err != nil {
+			return "", fmt.Errorf("sha256: %w", err)
+		}
+		f := strings.Fields(sumText)
+		if len(f) == 0 {
+			return "", fmt.Errorf("sha256 vacío")
+		}
+		want = strings.ToLower(f[0])
+		warn("kache %s: se verifica con el .sha256 del propio release (TURN_WATCH_KACHE_SHA256=release)", tag)
 	}
 	resp, err := client.Get(base + name)
 	if err != nil {
@@ -147,8 +193,8 @@ func downloadKache() (string, error) {
 		return "", err
 	}
 	tmp.Close()
-	if got := hex.EncodeToString(h.Sum(nil)); got != want[0] {
-		return "", fmt.Errorf("el SHA-256 no coincide (%s ≠ %s)", got, want[0])
+	if got := hex.EncodeToString(h.Sum(nil)); got != want {
+		return "", fmt.Errorf("el SHA-256 de %s no coincide (%s ≠ %s)", name, got, want)
 	}
 
 	f, err := os.Open(tmp.Name())
@@ -194,18 +240,6 @@ func downloadKache() (string, error) {
 		return "", fmt.Errorf("el paquete no traía kache")
 	}
 	return p, nil
-}
-
-func getJSON(c *http.Client, url string, v any) error {
-	resp, err := c.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(v)
 }
 
 func getText(c *http.Client, url string) (string, error) {

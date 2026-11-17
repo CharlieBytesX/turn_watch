@@ -14,6 +14,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,58 +39,76 @@ func isJob(p *proc) bool {
 type stoppedProc struct {
 	PID   int    `json:"pid"`
 	Start uint64 `json:"start"`
+	// UID: dueño del proceso al pausarlo (nil en archivos de versiones anteriores).
+	UID *int `json:"uid,omitempty"`
 }
 
 // Enforcer pausa y reanuda trabajos para no pasar del límite.
 type Enforcer struct {
-	file    string
-	stopped map[int]uint64 // pid → inicio (para no confundir pids reciclados)
-	Paused  int            // pausados ahora (para la vista)
-	Denied  int            // trabajos que no se pueden tocar (de otro usuario, sin root)
+	dir     string // carpeta del archivo de pausados (comprobada al escribir)
+	owner   int    // dueño esperado de esa carpeta
+	name    string
+	stopped map[int]stoppedProc // pid → lo que se pausó (inicio: para no confundir pids reciclados)
+	Paused  int                 // pausados ahora (para la vista)
+	Denied  int                 // trabajos que no se pueden tocar (de otro usuario, sin root)
 }
 
-func stoppedFile(root bool) string {
-	name := "stopped.json"
+// stoppedLocation: dónde guarda sus pausados el servicio del usuario (su carpeta) o
+// el ayudante de root (la carpeta de root, nunca la del usuario).
+func stoppedLocation(root bool) (dir string, owner int, name string) {
 	if root {
-		name = "stopped-root.json"
+		return rootStateDir(), rootOwner, "stopped-root.json"
 	}
-	return filepath.Join(runtimeDir(), name)
+	return runtimeDir(), os.Getuid(), "stopped.json"
 }
 
 func newEnforcer(root bool) *Enforcer {
-	e := &Enforcer{file: stoppedFile(root), stopped: map[int]uint64{}}
-	resumeFile(e.file) // de una sesión que murió sin reanudar
+	dir, owner, name := stoppedLocation(root)
+	e := &Enforcer{dir: dir, owner: owner, name: name, stopped: map[int]stoppedProc{}}
+	resumeFile(dir, owner, name) // de una sesión que murió sin reanudar
 	return e
 }
 
-// resumeFile reanuda los pausados que dejó otra sesión (si siguen siendo los mismos).
-func resumeFile(path string) {
-	b, err := os.ReadFile(path)
+// resumeFile reanuda los pausados que dejó otra sesión en dir/name, pero solo los
+// que siguen siendo lo que se pausó (validStopped), y borra el archivo. La carpeta
+// debe ser de owner y el archivo se lee sin seguir enlaces.
+func resumeFile(dir string, owner int, name string) {
+	b, err := readFileSafe(dir, owner, name, 1<<20)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "turn_watch: no se leen los pausados:", err)
+		}
 		return
 	}
 	var list []stoppedProc
 	_ = json.Unmarshal(b, &list)
-	for _, s := range list {
-		if startOf(s.PID) == s.Start {
+	if len(list) > 0 {
+		procs := readProcsLite()
+		for _, s := range list {
+			if why := validStopped(s, procs); why != "" {
+				fmt.Fprintf(os.Stderr, "turn_watch: no se reanuda el pid %d: %s\n", s.PID, why)
+				continue
+			}
 			_ = syscall.Kill(s.PID, syscall.SIGCONT)
 		}
 	}
-	_ = os.Remove(path)
+	_ = removeFileSafe(dir, owner, name)
 }
 
 func (e *Enforcer) save() {
 	if len(e.stopped) == 0 {
-		_ = os.Remove(e.file)
+		_ = removeFileSafe(e.dir, e.owner, e.name)
 		return
 	}
 	list := make([]stoppedProc, 0, len(e.stopped))
-	for pid, st := range e.stopped {
-		list = append(list, stoppedProc{pid, st})
+	for _, s := range e.stopped {
+		list = append(list, s)
 	}
+	sort.Slice(list, func(i, j int) bool { return list[i].PID < list[j].PID })
 	b, _ := json.Marshal(list)
-	_ = os.WriteFile(e.file+".tmp", b, 0o644)
-	_ = os.Rename(e.file+".tmp", e.file)
+	if err := writeFileSafe(e.dir, e.owner, e.name, b, 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "turn_watch: no se guardan los pausados:", err)
+	}
 }
 
 // Tick deja corriendo como mucho `limit` trabajos (los más antiguos).
@@ -131,7 +150,8 @@ func (e *Enforcer) Tick(limit int) {
 			running++
 			continue
 		}
-		e.stopped[p.pid] = p.start
+		uid := p.uid
+		e.stopped[p.pid] = stoppedProc{PID: p.pid, Start: p.start, UID: &uid}
 	}
 	for pid := range e.stopped {
 		if !alive[pid] {
@@ -144,13 +164,13 @@ func (e *Enforcer) Tick(limit int) {
 
 // Release reanuda todo lo que pausó.
 func (e *Enforcer) Release() {
-	for pid, st := range e.stopped {
-		if startOf(pid) == st {
+	for pid, s := range e.stopped {
+		if startOf(pid) == s.Start {
 			_ = syscall.Kill(pid, syscall.SIGCONT)
 		}
 	}
-	e.stopped = map[int]uint64{}
-	_ = os.Remove(e.file)
+	e.stopped = map[int]stoppedProc{}
+	_ = removeFileSafe(e.dir, e.owner, e.name)
 }
 
 // underCargo: el trabajo cuelga de un cargo (local o dentro de Docker).
@@ -185,7 +205,19 @@ func enforceCmd(args []string) {
 		fmt.Fprintln(os.Stderr, "uso: sudo turn_watch enforce --dir DIR")
 		os.Exit(2)
 	}
+	if os.Geteuid() != 0 {
+		fail("enforce: es el ayudante de root; se lanza con sudo")
+	}
+	dir = filepath.Clean(dir)
+	uid, err := enforceTarget(dir, os.Getenv("SUDO_UID"))
+	if err != nil {
+		fail("enforce: %v", err)
+	}
+	helperUID = uid
 	_ = os.Setenv("XDG_RUNTIME_DIR", filepath.Dir(dir))
+	if err := ensureRootStateDir(); err != nil {
+		fail("enforce: %v", err)
+	}
 	if helperAlive() {
 		return // ya hay uno
 	}
@@ -202,11 +234,15 @@ func enforceCmd(args []string) {
 		return
 	}
 	signal.Ignore(syscall.SIGHUP)
-	_ = os.WriteFile(helperPidPath(), []byte(strconv.Itoa(os.Getpid())), 0o644)
-	defer os.Remove(helperPidPath())
+	if err := writeFileSafe(rootStateDir(), rootOwner, helperPidName, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		fail("enforce: %v", err)
+	}
+	defer removeFileSafe(rootStateDir(), rootOwner, helperPidName)
 	e := newEnforcer(true)
-	// Lo que dejó en pausa el ayudante de antes del cambio de nombre (rustwatch).
-	resumeFile(filepath.Join(filepath.Dir(dir), oldName, "stopped-root.json"))
+	// Lo que dejaron en pausa ayudantes de versiones anteriores, que escribían en la
+	// carpeta del usuario: se lee sin seguir enlaces y cada pid se valida.
+	resumeFile(dir, uid, "stopped-root.json")
+	resumeFile(filepath.Join(filepath.Dir(dir), oldName), uid, "stopped-root.json")
 	defer e.Release()
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
