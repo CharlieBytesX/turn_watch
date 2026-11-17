@@ -26,8 +26,24 @@ unset), `~/Library/Caches/turn_watch/` on macOS.
 | `queue.lock` | service | `flock`: one queue owner at a time |
 | `control` | `on`/`off`, panel | request to turn the limit on or off |
 | `limit.request` | `limit N`, panel | request to change the limit live |
-| `stopped.json`, `stopped-root.json` | service, root helper | PIDs they paused, resumed after a crash |
+| `stopped.json` | service | PIDs it paused, resumed after a crash |
+
+The root helper never writes into that (user-owned) directory: its files go to
+`/run/turn_watch/<uid>/` (`/var/run/turn_watch/<uid>/` on macOS), root-owned and
+mode 0755 so the service can read `helper.pid`:
+
+| File | Written by | Purpose |
+| --- | --- | --- |
+| `stopped-root.json` | root helper | PIDs it paused, resumed after a crash |
 | `helper.pid` | root helper | whether whole-system mode is running |
+
+Every state file is written through `writeFileSafe` (the directory opened with
+`O_DIRECTORY|O_NOFOLLOW` and checked on the descriptor: a real directory, owned by
+the expected user, not group/other-writable; then a random temp name created with
+`openat(O_CREAT|O_EXCL|O_NOFOLLOW)` and `renameat`) and read with `O_NOFOLLOW`, so
+a symlink planted in a state directory can't redirect a write or a read. The root
+helper also validates `--dir` (absolute, named `turn_watch`, not a symlink, owned
+by `SUDO_UID`) and opens the queue's FIFO only if it is a FIFO owned by that user.
 
 Configuration: `config.json` in `~/.config/turn_watch/` (Linux) or
 `~/Library/Application Support/turn_watch/` (macOS). The service re-reads it every
@@ -46,8 +62,14 @@ pause.
 
 A build is a root `cargo` (one with no cargo above it) and everything under it. Its
 project, git worktree and branch come from the root's working directory (walking up
-to `.git`; worktrees are detected from the `gitdir:` file). Crates are counted from
-`rustc --crate-name …`; the phase (compiling, linking, build script, C/C++, fetching)
+to `.git`; worktrees are detected from the `gitdir:` file). Progress counts crates
+that are *done*, compiled or restored from cache: the larger of (a) units whose
+cargo fingerprint (`<target>/[<triple>/]<profile>/.fingerprint/*/*.json`, written by
+cargo when a unit finishes, whatever the rustc wrapper did) is newer than the
+build's start, and (b) crates seen in `rustc` or wrapper (`kache`, `sccache`)
+processes with `--crate-name` (the only source for Docker builds). The target dir
+is found like cargo does: `--target-dir`, `CARGO_TARGET_DIR`, `build.target-dir` in
+`.cargo/config.toml`, else `<workspace>/target`; the phase (compiling, linking, build script, C/C++, fetching)
 from the children. For Docker builds (Linux) the cargo runs as root inside BuildKit;
 its project is taken from the `Cargo.lock` of the directory where your
 `docker build`/`uc build` runs.
@@ -78,8 +100,11 @@ deletes the FIFO, so new cargos don't use it.
 have a cargo among their ancestors. Sorted by start time, the first N run; the rest
 get `SIGSTOP`. When a running one ends, the oldest paused one gets `SIGCONT`. The
 service never pauses anything else (agents, tests, servers). Paused PIDs are stored
-with their start time, so a recycled PID is never signalled; on startup, and when
-the root helper starts, leftovers from a crash are resumed.
+with their start time and owner, so a recycled PID is never signalled; on startup,
+and when the root helper starts, leftovers from a crash are resumed — but only PIDs
+that still have the recorded start time and owner, are stopped, and are a job
+under a cargo (no cgroup check: the pause deliberately reaches builds outside the
+slice, such as Docker's).
 
 **Whole-system mode.** The panel asks for sudo once (`sudo -v` in the terminal) and
 starts `sudo turn_watch enforce --dir DIR --detach`, which runs the same pause loop
@@ -95,6 +120,27 @@ clears it when off. The wrapper runs cargo with
 `user@.service` (an SSH session, another user) cannot be moved and are reported
 once in the log. With `agents_cap: false` they are moved out to
 `app.slice/turn_watch-agentes-libre.scope`.
+
+## kache
+
+`turn_watch install` downloads kache at the version pinned in `kache.go`
+(`kacheVersion`) and checks it against the SHA-256 pinned there for each platform;
+`kache init -y --no-shell` runs only when cargo has no `rustc-wrapper` yet (read from
+`RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER` and `$CARGO_HOME/config[.toml]`, parsed
+as TOML). What fails is kept in `kache-setup-error.txt` next to `config.json`.
+
+The service checks kache in a goroutine at startup and every 30 s:
+`kache --json daemon status`, then `kache --json stats --since 24h` only if the
+daemon is up, and `kache --json doctor` every 30 min. Each answer is kache's
+versioned JSON document (`schema_version` 1); a missing field, another schema
+version or `success: false` becomes an explicit "unavailable: why" state in
+`state.json` (`kache`), never zeros.
+
+kache's daemon (`kache.service`) is outside `turn_watch.slice` unless
+`kache_in_slice` is set (a drop-in with `Slice=turn_watch.slice`, applied on the
+next restart of `kache.service`). Compiles on a cache miss are started by the
+`kache` client under cargo, so they are in the slice and under the pause either
+way; kache's own scheduler can also hold compilers after misses.
 
 ## macOS
 

@@ -44,13 +44,18 @@ binario en `~/.local/bin` y corre `turn_watch install`, que prepara:
   de cargo; ver [preguntas](#por-qué-un-envoltorio-de-cargo));
 - el servicio de fondo: `turn_watch.service` + `turn_watch.slice` (unidades de
   systemd de usuario) en Linux, un LaunchAgent en macOS;
-- kache (lo detecta, o lo instala con `cargo-binstall` o desde su release oficial
-  de GitHub, verificando el SHA-256) y `kache init`, que pone `rustc-wrapper` en
-  `~/.cargo/config.toml`. Para saltarlo: `TURN_WATCH_SIN_KACHE=1`;
+- kache (lo detecta, o baja su release oficial de GitHub en una versión fijada en
+  turn_watch y la verifica contra un SHA-256 también fijado en turn_watch) y
+  `kache init`, que pone `rustc-wrapper` en `$CARGO_HOME/config.toml`, salvo que
+  cargo ya use otro `rustc-wrapper` (sccache, `RUSTC_WRAPPER`…), que nunca se pisa.
+  Para saltarlo: `TURN_WATCH_SIN_KACHE=1`; otra versión, a propósito:
+  `TURN_WATCH_KACHE_VERSION=vX.Y.Z` con `TURN_WATCH_KACHE_SHA256=<sha256 del .tar.gz>`
+  (o `=release` para aceptar el `.sha256` de ese release);
 - en Omarchy, el indicador de la barra.
 
-`~/.local/bin` tiene que ir **antes** que `~/.cargo/bin` en el `PATH`; el
-instalador avisa si no.
+`~/.local/bin` tiene que ir **antes** que `~/.cargo/bin` (y que shims como los de
+mise o asdf) en el `PATH`; el instalador, `turn_watch once` y el panel avisan si otro
+`cargo` va primero.
 
 Opciones: `TURN_WATCH_VERSION=v0.1.0` instala esa etiqueta; `TURN_WATCH_NO_SETUP=1`
 solo deja el binario. También puedes bajar un tar.gz de
@@ -103,12 +108,38 @@ El límite por defecto es todos los núcleos menos dos. La configuración está 
   "active": true,
   "system": false,
   "agents": ["claude", "codex", "opencode", "pi", "aider", "gemini", "cursor-agent", "goose"],
-  "agents_cap": true
+  "agents_cap": true,
+  "kache": true,
+  "kache_in_slice": false
 }
 ```
 
 `agents` es la lista de nombres de proceso que cuentan como agentes de código;
-`agents_cap: false` deja a los agentes sin tope (Linux).
+`agents_cap: false` deja a los agentes sin tope (Linux). `kache: false` apaga la
+caché (y sus avisos). `kache_in_slice: true` (Linux) hace que `turn_watch install`
+agregue un drop-in para que `kache.service` corra dentro de `turn_watch.slice` y su
+daemon comparta el tope de CPU; se aplica al reiniciar `kache.service` (ver
+[kache](#kache)).
+
+### kache
+
+La línea **Caché** del panel y `turn_watch once` muestran la salud de kache y sus
+últimas 24 h, de `kache --json stats --since 24h` cada 30 s (solo con su daemon vivo:
+`kache stats` arrancaría uno) y `kache --json doctor` cada 30 min:
+
+```
+Caché kache 82 % aciertos (1230/1500 en 24h) · ahorró 1h12m · almacén 3.2 GB de 10.0 GB · daemon ● 2.1.1
+      locales 1180 · prefetch 40 · remotos 10 · duplicados 20 · fallos 250 · 6120 entradas
+      desde 2026-10-02: 48211 aciertos, ahorró 42h00m
+```
+
+Si algo anda mal dice qué (no instalado, cargo usa otro wrapper, daemon parado,
+estadísticas no disponibles y por qué, problemas de doctor, último error) en vez
+de un número. Dos cosas a saber: el daemon de kache (`kache.service`) corre por
+defecto fuera de `turn_watch.slice`, así que su propia CPU (hashes, restauraciones,
+subidas) no tiene tope —las compilaciones de un fallo de caché siguen corriendo
+bajo cargo, dentro de la slice—; y kache tiene su propio planificador, que dosifica
+los compiladores tras un fallo además de la cola de turn_watch.
 
 ## Cómo funciona
 
