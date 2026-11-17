@@ -5,8 +5,8 @@ import qs.Commons
 import qs.Ui
 
 // Indicador de compilaciones de Rust. Lee `turn_watch status` (una línea JSON
-// que escribe el daemon de usuario turn_watch.service) cada 2 s. Se ve solo
-// mientras hay compilaciones; el tooltip trae el detalle y el clic abre
+// que escribe el daemon de usuario turn_watch.service) cada 2 s. Siempre se ve
+// (atenuado si no compila nada, en color de acento si compila); el tooltip trae el detalle y el clic abre
 // el panel de turn_watch en una terminal flotante.
 BarWidget {
   id: root
@@ -34,13 +34,18 @@ BarWidget {
     moduleName: root.moduleName
     settings: root.settings
     active: root.building
+    // Siempre visible: atenuado en reposo, en color de acento mientras compila.
+    // Fuera de un grupo de indicadores, un indicador inactivo queda transparente,
+    // así que se fuerza como activo y el estado se muestra con el color y el atenuado.
+    activeOverride: true
+    useActiveColor: root.building
+    dimmed: !root.building
     activeColor: Color.accent
     activeText: ""
     inactiveText: ""
     activeTooltipText: root.tooltip
     inactiveTooltipText: root.tooltip
-    // Solo ocupa lugar mientras compila algo.
-    revealWhenInactive: false
+    revealWhenInactive: true
     onPressed: function(button) {
       Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy.terminal", Quickshell.env("HOME") + "/.local/bin/turn_watch"])
     }
