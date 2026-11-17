@@ -41,8 +41,8 @@ BarWidget {
     useActiveColor: root.building
     dimmed: !root.building
     activeColor: Color.accent
-    activeText: ""
-    inactiveText: ""
+    activeText: "󱘗"
+    inactiveText: "󱘗"
     activeTooltipText: root.tooltip
     inactiveTooltipText: root.tooltip
     revealWhenInactive: true

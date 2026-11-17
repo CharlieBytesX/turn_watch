@@ -7,6 +7,7 @@ package main
 // barra.
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -162,16 +163,32 @@ func installOmarchyPlugin() error {
 	if err := os.MkdirAll(pluginDir(), 0o755); err != nil {
 		return err
 	}
+	changed := false
 	for _, name := range []string{"manifest.json", "BarWidget.qml"} {
 		b, err := omarchyPlugin.ReadFile("omarchy/" + name)
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(pluginDir(), name), b, 0o644); err != nil {
+		path := filepath.Join(pluginDir(), name)
+		if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, b) {
+			continue
+		}
+		if err := os.WriteFile(path, b, 0o644); err != nil {
 			return err
 		}
+		changed = true
 	}
 	_ = exec.Command("omarchy-shell", "shell", "rescanPlugins").Run()
+	// rescanPlugins registra plugins nuevos, pero no vuelve a crear un widget
+	// que ya está en la barra: sin reiniciar el shell seguiría el QML viejo.
+	// Solo se reinicia si el plugin cambió de verdad.
+	if changed && onBar(pluginID) {
+		if out, err := exec.Command("omarchy", "restart", "shell").CombinedOutput(); err != nil {
+			step("barra: no se pudo reiniciar el shell (%s); corré `omarchy restart shell`", strings.TrimSpace(string(out)))
+		} else {
+			step("barra: shell reiniciado para cargar el widget nuevo")
+		}
+	}
 	// Donde estaba el de rustwatch, si estaba; si no, donde lo ponga omarchy.
 	if msg := migrateBar(); msg != "" {
 		step("barra: plugin %s %s", pluginID, msg)
