@@ -37,6 +37,11 @@ func demoState() *State {
 			Top: []TopCmd{{Cmd: "claude", Cores: 0.3, N: 2, MemMB: 800}}},
 		{Project: "otroapp", Branch: "feat/login", Agents: []string{"codex"}, Cores: 0.1, MemMB: 350, Procs: 4, Started: now.Add(-9 * time.Minute)},
 	}
+	st.Kache = &KacheStatus{Checked: now, State: kacheOK, DaemonVersion: "2.1.1", Wrapper: WrapperInfo{Kind: WrapperKache, Value: "kache"},
+		Stats: &KacheStats{Window: "24h", LocalHits: 1180, PrefetchHits: 40, RemoteHits: 10, Dups: 20, Misses: 250, TimeSavedMs: 4332000,
+			StoreBytes: 3435973837, StoreLimitBytes: 10737418240, Entries: 6120,
+			Lifetime: &KacheLifetime{Since: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC), Hits: 48211, TimeSavedMs: 151200000}},
+		Doctor: &KacheDoctor{Checked: now, Issues: 1, Failed: []string{"Cache FS: 1.2 GiB free, below the 1 GiB reserve"}}}
 	st.Recent = []*Build{{Key: "3-3", Project: "miapp", What: "Linux x86_64 · check", Started: now.Add(-12 * time.Minute), Ended: now.Add(-9 * time.Minute), Done: 120, PeakCores: 8.1, PeakMemMB: 2100}}
 	return st
 }
@@ -48,6 +53,7 @@ func TestPanelFits(t *testing.T) {
 	for _, sz := range [][2]int{{24, 80}, {40, 120}, {60, 200}, {12, 60}, {8, 40}, {3, 20}, {30, 100}} {
 		rows, cols := sz[0], sz[1]
 		u := newUI()
+		u.warns = []string{"en tu PATH, ~/.local/share/mise/shims/cargo va antes que ~/.local/bin/cargo"}
 		u.open["b1-1"] = true
 		u.open["amiapp [agent-0123456…] (main)"] = true
 		lines := panel(st, u, rows, cols)
@@ -74,7 +80,8 @@ func TestPanelFits(t *testing.T) {
 	if l := panel(nil, newUI(), 24, 80); len(l) != 24 {
 		t.Errorf("sin estado: %d filas", len(l))
 	}
-	if s := renderPlain(st, 100); !strings.Contains(s, "Compilaciones") {
+	if s := renderPlainWarn(st, 100, []string{"en tu PATH, ~/.local/share/mise/shims/cargo va antes que ~/.local/bin/cargo"}); !strings.Contains(s, "Compilaciones") ||
+		!strings.Contains(s, "Caché kache 82 % aciertos (1230/1500 en 24h)") || !strings.Contains(s, "⚠ en tu PATH") {
 		t.Errorf("once: %s", s)
 	} else if dump != "" {
 		_ = os.WriteFile(filepath.Join(dump, "demo-once.txt"), []byte(s), 0o644)

@@ -1,0 +1,5 @@
+{"schema_version":1,"command":"stats","success":true,
+ "disk":{"store_bytes":0,"store_limit_bytes":10737418240,"disk_private_bytes":0,"cloned_into_targets_bytes":0,"snapshot_retained_bytes":0,"cloned_coverage":"partial"},
+ "stores":[],"entries":0,"hit_rate_pct":0.0,"weighted_hit_rate_pct":null,"time_saved_ms":0,"hit_elapsed_ms":0,"miss_elapsed_ms":0,
+ "total_elapsed_ms":0,"total_flight_wait_ms":0,"total_permit_wait_ms":0,"local_hits":0,"readonly_hits":0,"prefetch_hits":0,
+ "remote_hits":0,"dups":0,"misses":0,"daemon_connected":true,"daemon_version":"2.1.1","daemon_epoch":1762941060,"hours":24,"since_secs":86400,"since":"24h"}

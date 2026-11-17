@@ -467,6 +467,7 @@ func watch() {
 	soon.Stop()
 
 	view := newUI()
+	view.warns = localWarnings(st)
 	draw := func(full bool) {
 		st = readState()
 		rows, cols := t.size()

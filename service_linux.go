@@ -245,3 +245,45 @@ func writeShellConfig(cfg map[string]any) {
 
 // runtimeBase: dónde va la carpeta de estado si no hay XDG_RUNTIME_DIR.
 func runtimeBase() string { return os.TempDir() }
+
+// defaultRootStateBase: la carpeta del ayudante de root (/run es solo de root).
+const defaultRootStateBase = "/run/turn_watch"
+
+// kacheDropIn: el drop-in que mete kache.service en turn_watch.slice.
+func kacheDropIn() string {
+	return filepath.Join(unitDir(), "kache.service.d", "50-turn_watch-slice.conf")
+}
+
+const kacheDropInText = `# Escrito por turn_watch ("kache_in_slice": true en config.json): el daemon de
+# kache comparte el tope de CPU de turn_watch.slice.
+[Service]
+Slice=` + sliceName + `
+`
+
+// applyKacheSlice pone (on) o quita el drop-in. No reinicia kache.service: una
+// compilación en curso que pierde el daemon falla; se dice cómo aplicarlo.
+func applyKacheSlice(on bool) {
+	path := kacheDropIn()
+	b, err := os.ReadFile(path)
+	has := err == nil
+	ours := has && string(b) == kacheDropInText
+	switch {
+	case on && ours:
+		step("kache.service: dentro de %s", sliceName)
+		return
+	case on:
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.WriteFile(path, []byte(kacheDropInText), 0o644); err != nil {
+			warn("kache.service en %s: %v", sliceName, err)
+			return
+		}
+	case has && strings.Contains(string(b), "turn_watch"):
+		_ = os.Remove(path)
+		_ = os.Remove(filepath.Dir(path)) // solo si quedó vacía
+	default:
+		return // nada nuestro que quitar
+	}
+	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	where := map[bool]string{true: "dentro de " + sliceName, false: "fuera de " + sliceName}[on]
+	step("kache.service: %s al reiniciarlo (`systemctl --user restart kache.service` cuando no compile nada)", where)
+}

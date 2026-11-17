@@ -48,7 +48,7 @@ func stopOldService() (bool, string) {
 		}
 	}
 	// Lo que el servicio viejo dejó en pausa (sus propios procesos).
-	resumeFile(filepath.Join(oldRuntimeDir(), "stopped.json"))
+	resumeFile(oldRuntimeDir(), os.Getuid(), "stopped.json")
 	return true, note
 }
 

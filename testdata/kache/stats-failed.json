@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "command": "stats",
+  "success": false,
+  "error": {
+    "code": "invalid_arguments",
+    "message": "invalid --since \"soon\": use forms like 15m, 2h, 24h or 7d",
+    "causes": []
+  }
+}

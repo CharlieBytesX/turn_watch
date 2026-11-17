@@ -18,6 +18,12 @@ type Config struct {
 	// Con el límite activo, meter a los agentes (y todo lo que lancen) en
 	// turn_watch.slice. nil: sí.
 	AgentsCap *bool `json:"agents_cap,omitempty"`
+	// Caché kache. nil: sí. false: no se usa y el panel no avisa por ella
+	// (`TURN_WATCH_SIN_KACHE=1 turn_watch install` lo deja así).
+	Kache *bool `json:"kache,omitempty"`
+	// Linux: meter el daemon de kache (kache.service) en turn_watch.slice, con el
+	// mismo tope de CPU. nil o false: fuera (lo aplica `turn_watch install`).
+	KacheInSlice *bool `json:"kache_in_slice,omitempty"`
 }
 
 var defaultAgents = []string{"claude", "codex", "opencode", "pi", "aider", "gemini", "cursor-agent", "goose"}
