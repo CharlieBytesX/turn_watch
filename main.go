@@ -1005,7 +1005,7 @@ macOS): sigue activo aunque cierres el panel, hasta que lo desactives.
   turn_watch uninstall    quitar todo lo anterior
   turn_watch version      la versión
 
-Agentes de código (claude, codex, opencode, pi, aider, gemini, cursor-agent, goose;
+Agentes de código (claude, codex, opencode, pi, ante, aider, gemini, cursor-agent, goose;
 lista en config.json, "agents"): todo lo que lanzan (tests, builds, servidores,
 scripts) se agrupa por proyecto, worktree y rama, con CPU, RAM y los comandos que
 más CPU usan. En Linux, con el límite activo y "agents_cap": true (por defecto), el

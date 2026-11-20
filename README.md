@@ -106,7 +106,7 @@ The default limit is all cores minus two. Configuration lives in
   "slots": 10,
   "active": true,
   "system": false,
-  "agents": ["claude", "codex", "opencode", "pi", "aider", "gemini", "cursor-agent", "goose"],
+  "agents": ["claude", "codex", "opencode", "pi", "ante", "aider", "gemini", "cursor-agent", "goose"],
   "agents_cap": true,
   "kache": true,
   "kache_in_slice": false

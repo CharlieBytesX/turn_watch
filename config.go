@@ -26,7 +26,7 @@ type Config struct {
 	KacheInSlice *bool `json:"kache_in_slice,omitempty"`
 }
 
-var defaultAgents = []string{"claude", "codex", "opencode", "pi", "aider", "gemini", "cursor-agent", "goose"}
+var defaultAgents = []string{"claude", "codex", "opencode", "pi", "ante", "aider", "gemini", "cursor-agent", "goose"}
 
 func (c Config) agentNames() []string {
 	if len(c.Agents) == 0 {
