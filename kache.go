@@ -36,15 +36,15 @@ import (
 const kacheRepo = "kunobi-ninja/kache"
 
 // kacheVersion: la versión que instala turn_watch si kache no está.
-const kacheVersion = "v2.1.1"
+const kacheVersion = "v2.2.0"
 
 // kacheSHA256: SHA-256 de cada kache-<arch>-<triple>.tar.gz de kacheVersion,
 // calculados al fijar la versión (y comparados con los .sha256 del release).
 var kacheSHA256 = map[string]string{
-	"x86_64-unknown-linux-musl":  "7603022ee78b48a9afde9055b0df27e5c2cef1351a54fa2de6b4fde0f37ae22c",
-	"aarch64-unknown-linux-musl": "466f0aef4885f5291359b3c1bc0c9976824634194c5b67e1cee2a4fe3035155a",
-	"x86_64-apple-darwin":        "69627cfec3017aa521d06a84afc6c5e74734468678bd6659d92afd57d9a4f457",
-	"aarch64-apple-darwin":       "d4533baa3c57be51d5f2390b70551ca9d6c2a83a1933266fa0a57053774e08f6",
+	"x86_64-unknown-linux-musl":  "eeb6e72b9f55d0e9d61cae0789ffa8f3ab8c33bef166b7af655cc0806447ebac",
+	"aarch64-unknown-linux-musl": "99c74e9332a92e8f06d6fbdb077aff5365f364d5b5e6d69cf013fa616e887f22",
+	"x86_64-apple-darwin":        "cb76efd5c23023bff27cb2b7d787b139b18fd0c851dda84f45b5f71128c38b0e",
+	"aarch64-apple-darwin":       "8096492dc878796db6a79fef05f3e15ac8af450059c59db1f546eec00d81c3f5",
 }
 
 // kacheAsset: el triple de esta plataforma ("" si no hay binario de kache).
@@ -70,7 +70,7 @@ func kachePin(asset, version, sum string) (tag, want string, err error) {
 		return kacheVersion, kacheSHA256[asset], nil
 	}
 	if !strings.HasPrefix(version, "v") || strings.ContainsAny(version, "/ ?#") {
-		return "", "", fmt.Errorf("TURN_WATCH_KACHE_VERSION no válida: %q (p. ej. v2.1.1)", version)
+		return "", "", fmt.Errorf("TURN_WATCH_KACHE_VERSION no válida: %q (p. ej. v2.2.0)", version)
 	}
 	switch {
 	case sum == "":
