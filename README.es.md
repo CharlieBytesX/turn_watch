@@ -156,7 +156,10 @@ Más detalle en [docs/como-funciona.md](docs/como-funciona.md).
   cargo de verdad con `CARGO_MAKEFLAGS=--jobserver-auth=fifo:…`: cada `rustc` toma
   un turno antes de arrancar y lo devuelve al terminar, entre todas las
   compilaciones a la vez. Al bajar el límite, los turnos sobrantes se retiran a
-  medida que vuelven.
+  medida que vuelven. El envoltorio además quita de la línea de comandos el
+  paralelismo explícito (`-j N`, `-jN`, `--jobs N`, `--jobs=N`): un `-j` puesto a
+  mano le gana al jobserver, así que `cargo build -j 24` abriría 24 por su cuenta y
+  se saltaría la cola. Lo que va después de `--` es del programa y no se toca.
 - **Pausa.** Cinco veces por segundo el servicio cuenta los trabajos de
   compilación bajo cualquier cargo y pausa (`SIGSTOP`) los más nuevos que pasen del
   límite; los reanuda (`SIGCONT`) cuando hay sitio. Así alcanza también a las

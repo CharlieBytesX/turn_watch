@@ -154,7 +154,11 @@ More detail in [docs/how-it-works.md](docs/how-it-works.md).
   tokens (`$XDG_RUNTIME_DIR/turn_watch/jobserver`). The cargo wrapper passes it to
   the real cargo as `CARGO_MAKEFLAGS=--jobserver-auth=fifo:…`, so every `rustc` takes
   a token before starting and gives it back when done — across all concurrent
-  builds. Lowering the limit takes tokens back as they are returned.
+  builds. Lowering the limit takes tokens back as they are returned. The wrapper
+  also strips explicit parallelism from the command line (`-j N`, `-jN`, `--jobs N`,
+  `--jobs=N`): a hand-written `-j` beats the jobserver, so `cargo build -j 24`
+  would open 24 of its own and bypass the queue. Anything after `--` belongs to the
+  program being run and is left alone.
 - **Pause.** Five times a second the service counts compile jobs under any cargo and
   pauses (`SIGSTOP`) the newest ones above the limit, resuming them (`SIGCONT`)
   when there is room. This also catches builds that bypass the wrapper. Paused

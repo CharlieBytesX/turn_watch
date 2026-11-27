@@ -2,9 +2,11 @@ package main
 
 // Envoltorio de cargo: `turn_watch install` deja ~/.local/bin/cargo como enlace a este
 // mismo ejecutable. Llamado como `cargo`, busca el cargo de verdad y:
-//   - con el límite activo (cola activa): le pasa el jobserver de turn_watch y, en
-//     Linux, lo corre dentro de turn_watch.slice (systemd-run --scope), con el tope
-//     de CPU; en macOS, con prioridad baja (nice 10);
+//   - con el límite activo (cola activa): le pasa el jobserver de turn_watch, le
+//     quita el paralelismo explícito (`-j 24`, `--jobs=8`: un `-j` a mano le gana
+//     al jobserver y se saltaría la cola); en Linux, además, lo corre dentro de
+//     turn_watch.slice (systemd-run --scope), con el tope de CPU; en macOS, con
+//     prioridad baja (nice 10);
 //   - sin límite: lo corre tal cual.
 
 import (
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -42,6 +45,10 @@ func shim() {
 	env := os.Environ()
 	if envVar("IN_QUEUE") == "" {
 		if slots, _ := queueStatus(); slots > 0 {
+			if sin, quitadas := dropJobFlags(args[1:]); len(quitadas) > 0 {
+				args = append([]string{real}, sin...)
+				fmt.Fprintln(os.Stderr, "turn_watch (cargo): "+strings.Join(quitadas, " ")+" sobra: la cola reparte los turnos")
+			}
 			env = append(env,
 				"TURN_WATCH_IN_QUEUE=1",
 				"CARGO_MAKEFLAGS=-j"+strconv.Itoa(slots)+" --jobserver-auth=fifo:"+jobserverPath(),
@@ -51,6 +58,39 @@ func shim() {
 		}
 	}
 	must(syscall.Exec(real, args, env))
+}
+
+// dropJobFlags: quita de los argumentos de cargo el paralelismo explícito (-j N,
+// -jN, --jobs N, --jobs=N) mientras haya cola, para que reparta ella. Un -j puesto
+// a mano le gana al jobserver de CARGO_MAKEFLAGS: cada cargo abriría su propio
+// paralelismo y entre todos pasarían del límite, que es justo lo que la cola evita.
+// Lo que viene después de `--` es del programa que cargo ejecuta, no de cargo, y se
+// queda como está. Devuelve los argumentos sin las banderas y lo que se quitó, para
+// avisarlo en el log.
+func dropJobFlags(args []string) (sin []string, quitadas []string) {
+	sin = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return append(sin, args[i:]...), quitadas
+		}
+		switch {
+		case a == "-j" || a == "--jobs":
+			quitada := a
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				quitada += " " + args[i+1]
+				i++
+			}
+			quitadas = append(quitadas, quitada)
+		case strings.HasPrefix(a, "-j") && len(a) > 2:
+			quitadas = append(quitadas, a)
+		case strings.HasPrefix(a, "--jobs="):
+			quitadas = append(quitadas, a)
+		default:
+			sin = append(sin, a)
+		}
+	}
+	return sin, quitadas
 }
 
 func without(env []string, key string) []string {

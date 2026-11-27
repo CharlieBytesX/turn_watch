@@ -89,7 +89,11 @@ shown once, as builds.
 
 **Queue.** The service creates the FIFO and writes N−1 tokens (`+` bytes); each cargo
 has one implicit token, per the GNU make jobserver protocol. The wrapper sets
-`CARGO_MAKEFLAGS="-jN --jobserver-auth=fifo:PATH"` and removes `CARGO_BUILD_JOBS`.
+`CARGO_MAKEFLAGS="-jN --jobserver-auth=fifo:PATH"`, removes `CARGO_BUILD_JOBS` and
+strips the `-j` from the command line (`-jN`, `-j N`, `--jobs N`, `--jobs=N`): an
+explicit `-j` beats the jobserver, so that cargo would open its own parallelism,
+once per concurrent build. Anything after `--` is the program's, not cargo's, and
+is left as is.
 Raising the limit writes more tokens; lowering it registers a debt and a reader
 takes tokens out as they come back. When nothing is building for 3 s the pool is
 topped up (a process that died holding tokens loses them). Turning the limit off

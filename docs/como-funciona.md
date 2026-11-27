@@ -84,8 +84,12 @@ Las compilaciones que lanza un agente salen una sola vez, como compilaciones.
 
 **Cola.** El servicio crea la FIFO y escribe N−1 turnos (bytes `+`); cada cargo
 tiene un turno implícito, según el protocolo del jobserver de GNU make. El
-envoltorio pone `CARGO_MAKEFLAGS="-jN --jobserver-auth=fifo:RUTA"` y quita
-`CARGO_BUILD_JOBS`. Subir el límite escribe más turnos; bajarlo anota una deuda y un
+envoltorio pone `CARGO_MAKEFLAGS="-jN --jobserver-auth=fifo:RUTA"`, quita
+`CARGO_BUILD_JOBS` y quita también el `-j` de la línea de comandos (`-jN`, `-j N`,
+`--jobs N`, `--jobs=N`): un `-j` explícito le gana al jobserver y ese cargo abriría
+su propio paralelismo, tantas veces como compilaciones haya a la vez. Lo que va
+después de `--` es del programa, no de cargo, y se deja igual. Subir el límite
+escribe más turnos; bajarlo anota una deuda y un
 lector retira turnos a medida que vuelven. Si nada compila durante 3 s se rellena
 el fondo (un proceso que murió con turnos en la mano los pierde). Al desactivar el
 límite se escriben turnos de sobra (lo que esperaba sigue como una compilación sin
