@@ -36,15 +36,15 @@ import (
 const kacheRepo = "kunobi-ninja/kache"
 
 // kacheVersion: la versión que instala turn_watch si kache no está.
-const kacheVersion = "v2.2.0"
+const kacheVersion = "v2.4.0"
 
 // kacheSHA256: SHA-256 de cada kache-<arch>-<triple>.tar.gz de kacheVersion,
 // calculados al fijar la versión (y comparados con los .sha256 del release).
 var kacheSHA256 = map[string]string{
-	"x86_64-unknown-linux-musl":  "eeb6e72b9f55d0e9d61cae0789ffa8f3ab8c33bef166b7af655cc0806447ebac",
-	"aarch64-unknown-linux-musl": "99c74e9332a92e8f06d6fbdb077aff5365f364d5b5e6d69cf013fa616e887f22",
-	"x86_64-apple-darwin":        "cb76efd5c23023bff27cb2b7d787b139b18fd0c851dda84f45b5f71128c38b0e",
-	"aarch64-apple-darwin":       "8096492dc878796db6a79fef05f3e15ac8af450059c59db1f546eec00d81c3f5",
+	"x86_64-unknown-linux-musl":  "6dc5feb2fdcc982538869bc0d0f63ad0da2c8f1a2c22649e7707ff4eb4dbaab7",
+	"aarch64-unknown-linux-musl": "061e02232ba1b5f64a0bb3b8e1cdb97cd2dff12932a1522666e32671f8182aae",
+	"x86_64-apple-darwin":        "4e729f8836e669e33d60fcfaf4bd7db4806fe4a9feccb7bdaca47238445d70a3",
+	"aarch64-apple-darwin":       "547c95dc178d02d8db72a0b6217086dfc71d339640b072ccf9eece52a5f621f7",
 }
 
 // kacheAsset: el triple de esta plataforma ("" si no hay binario de kache).
